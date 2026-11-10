@@ -1,0 +1,9 @@
+target/
+.local/
+.env
+.env.*
+!.env.example
+*.log
+.idea/
+.DS_Store
+*.war

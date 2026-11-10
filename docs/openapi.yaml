@@ -1,0 +1,462 @@
+openapi: 3.1.0
+info:
+  title: PayBridge API
+  version: 0.1.0
+  description: Synthetic payment orchestration API. No real payments or card data are supported.
+servers:
+  - url: http://127.0.0.1:5602
+    description: Local H2 profile
+security:
+  - sessionCookie: []
+paths:
+  /actuator/health:
+    get:
+      summary: Read API health
+      security: []
+      responses:
+        '200':
+          description: Health status
+  /api/v1/version:
+    get:
+      summary: Read the backend artifact version
+      security: []
+      responses:
+        '200':
+          description: API service name and SemVer release from the Maven build.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [service, version]
+                properties:
+                  service: { type: string, const: paybridge-api }
+                  version: { type: string, pattern: '^\\d+\\.\\d+\\.\\d+$' }
+  /api/v1/auth/csrf:
+    get:
+      summary: Obtain a CSRF token
+      security: []
+      responses:
+        '200':
+          description: CSRF token and cookie
+  /api/v1/auth/profiles:
+    get:
+      summary: List available synthetic local workspace profiles
+      description: Available only when local profile login is enabled; roles come from the server catalog.
+      security: []
+      responses:
+        '200':
+          description: Supported synthetic profiles without credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkspaceProfileCatalog'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/auth/profile-login:
+    post:
+      summary: Start a server-managed session for a synthetic local profile
+      description: The server looks up the account ID and assigns the role; no role or credential is accepted.
+      security:
+        - csrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [accountId]
+              properties:
+                accountId:
+                  type: string
+                  description: Fixed server-side synthetic profile ID; not a credential.
+                  enum: [merchant-northstar, merchant-cedar, operator, auditor]
+      responses:
+        '200':
+          description: Session created with a server-assigned role
+          headers:
+            Set-Cookie:
+              description: HttpOnly, SameSite session cookie managed by the API.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/auth/me:
+    get:
+      summary: Read the current session identity
+      responses:
+        '200':
+          description: Current synthetic identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/auth/logout:
+    post:
+      summary: End the current session
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      responses:
+        '200':
+          description: Server-managed session invalidated; no response body
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/overview:
+    get:
+      summary: Read role-scoped payment metrics
+      responses:
+        '200':
+          description: Payment and operations counts
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/v1/payment-intents:
+    get:
+      summary: List role-scoped payment intents
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+            maxLength: 80
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Scoped payment intent list
+    post:
+      summary: Create a simulated payment intent
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIntentRequest'
+      responses:
+        '201':
+          description: New intent created
+        '200':
+          description: Idempotent replay of the same request
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/payment-intents/{intentId}:
+    get:
+      summary: Read one role-scoped payment intent
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+      responses:
+        '200':
+          description: Payment intent
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/v1/payment-intents/{intentId}/authorize:
+    post:
+      summary: Simulate authorization
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Updated intent; approved or declined according to synthetic outcome
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/payment-intents/{intentId}/capture:
+    post:
+      summary: Capture a simulated authorized intent
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Updated intent and outbox event
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/payment-intents/{intentId}/void:
+    post:
+      summary: Void an authorized intent (operator only)
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Voided intent
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/payment-intents/{intentId}/refunds:
+    post:
+      summary: Record a bounded simulated refund (operator only)
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, reason]
+              properties:
+                amountMinor:
+                  type: integer
+                  minimum: 1
+                reason:
+                  type: string
+                  minLength: 4
+                  maxLength: 160
+      responses:
+        '200':
+          description: Updated intent; no funds move
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+  /api/v1/payment-intents/{intentId}/reconcile:
+    post:
+      summary: Reconcile a payment intent (operator only)
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Reconciliation result
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/v1/payment-intents/{intentId}/webhook-deliveries:
+    post:
+      summary: Deliver pending HMAC-signed synthetic webhook events
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+      responses:
+        '200':
+          description: Delivery acknowledgements
+  /api/v1/webhook-events:
+    get:
+      summary: List role-scoped verified webhook events
+      parameters:
+        - name: intentId
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Webhook events
+  /api/v1/reconciliations:
+    get:
+      summary: List role-scoped reconciliation records
+      responses:
+        '200':
+          description: Reconciliation history
+  /api/v1/audit-events:
+    get:
+      summary: List role-scoped audit events
+      responses:
+        '200':
+          description: Audit history
+  /api/v1/client-errors:
+    post:
+      summary: Record an allowlisted client error event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventName]
+              additionalProperties: false
+              properties:
+                eventName:
+                  const: ui.error
+      responses:
+        '200':
+          description: Minimal event accepted
+        '400':
+          $ref: '#/components/responses/BadRequest'
+  /api/v1/webhooks/receiver:
+    post:
+      summary: Receive an HMAC-signed synthetic provider event
+      security:
+        - webhookSignature: []
+      parameters:
+        - name: X-PayBridge-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^sha256=[a-f0-9]+$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProviderWebhookPayload'
+      responses:
+        '200':
+          description: Event accepted or identified as a duplicate
+        '401':
+          description: Signature invalid
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: JSESSIONID
+      description: Server-managed local session; it does not authorize payment-processor access.
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-XSRF-TOKEN
+    webhookSignature:
+      type: apiKey
+      in: header
+      name: X-PayBridge-Signature
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      schema:
+        type: string
+        maxLength: 80
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+    IntentId:
+      name: intentId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    AppRole:
+      type: string
+      enum: [MERCHANT, OPERATOR, AUDITOR]
+    WorkspaceProfile:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, role]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/AppRole'
+    WorkspaceProfileCatalog:
+      type: object
+      additionalProperties: false
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkspaceProfile'
+    SessionUser:
+      type: object
+      additionalProperties: false
+      required: [id, displayName, role, merchantId]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        role:
+          $ref: '#/components/schemas/AppRole'
+        merchantId:
+          type: [string, 'null']
+    SessionResponse:
+      type: object
+      additionalProperties: false
+      required: [user, localProfileSession]
+      properties:
+        user:
+          $ref: '#/components/schemas/SessionUser'
+        localProfileSession:
+          type: boolean
+    CreateIntentRequest:
+      type: object
+      additionalProperties: false
+      required: [amountMinor, currency, description, simulationOutcome]
+      properties:
+        amountMinor:
+          type: integer
+          minimum: 1
+          maximum: 100000000
+        currency:
+          const: USD
+        description:
+          type: string
+          maxLength: 160
+        simulationOutcome:
+          type: string
+          enum: [APPROVE, DECLINE]
+    ProviderWebhookPayload:
+      type: object
+      additionalProperties: false
+      required: [eventId, eventType, intentId, amountMinor, occurredAt]
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        intentId:
+          type: string
+        amountMinor:
+          type: integer
+          minimum: 1
+        occurredAt:
+          type: string
+          format: date-time
+  responses:
+    BadRequest:
+      description: Invalid request
+    Unauthorized:
+      description: Authentication required
+    Forbidden:
+      description: Role does not allow this action
+    NotFound:
+      description: Resource not found in the caller's scope
+    Conflict:
+      description: Invalid state transition, duplicate conflict, or amount invariant failure
