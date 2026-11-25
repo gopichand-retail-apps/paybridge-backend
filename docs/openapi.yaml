@@ -237,11 +237,32 @@ paths:
                   maxLength: 160
       responses:
         '200':
-          description: Updated intent; no funds move
+          description: >-
+            Updated intent; no funds move. Repeating the same Idempotency-Key with the same body, including an
+            overlapping request, returns this same result; the refund is recorded once.
         '403':
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+    get:
+      summary: Read the refund history of one role-scoped payment intent
+      description: >-
+        Newest first. A merchant sees only its own intents; another merchant's intent returns 404, never a
+        partial record. Refunds recorded before actor tracking return null actorId, actorName and
+        remainingAfterMinor.
+      parameters:
+        - $ref: '#/components/parameters/IntentId'
+      responses:
+        '200':
+          description: Refund history with the remaining refundable balance
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundHistory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
   /api/v1/payment-intents/{intentId}/reconcile:
     post:
       summary: Reconcile a payment intent (operator only)
@@ -415,6 +436,60 @@ components:
           $ref: '#/components/schemas/SessionUser'
         localProfileSession:
           type: boolean
+    Refund:
+      type: object
+      additionalProperties: false
+      required: [id, paymentIntentId, actorId, actorName, reason, currency, amountMinor, remainingAfterMinor, createdAt]
+      properties:
+        id:
+          type: string
+          description: Refund reference
+        paymentIntentId:
+          type: string
+        actorId:
+          type: [string, 'null']
+        actorName:
+          type: [string, 'null']
+        reason:
+          type: string
+        currency:
+          const: USD
+        amountMinor:
+          type: integer
+          minimum: 1
+        remainingAfterMinor:
+          type: [integer, 'null']
+          minimum: 0
+          description: Refundable balance left immediately after this refund
+        createdAt:
+          type: string
+          format: date-time
+    RefundHistory:
+      type: object
+      additionalProperties: false
+      required:
+        - paymentIntentId
+        - currency
+        - capturedAmountMinor
+        - refundedAmountMinor
+        - remainingRefundableMinor
+        - refunds
+      properties:
+        paymentIntentId:
+          type: string
+        currency:
+          const: USD
+        capturedAmountMinor:
+          type: integer
+        refundedAmountMinor:
+          type: integer
+        remainingRefundableMinor:
+          type: integer
+          minimum: 0
+        refunds:
+          type: array
+          items:
+            $ref: '#/components/schemas/Refund'
     CreateIntentRequest:
       type: object
       additionalProperties: false

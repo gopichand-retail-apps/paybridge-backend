@@ -2,6 +2,7 @@ package com.paybridge.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -17,7 +18,9 @@ import static org.mockito.Mockito.when;
 import com.paybridge.api.ApiDtos.CreateIntentRequest;
 import com.paybridge.api.ApiDtos.PaymentIntentView;
 import com.paybridge.api.ApiDtos.ReconciliationView;
+import com.paybridge.api.ApiDtos.RefundHistoryView;
 import com.paybridge.api.ApiDtos.RefundRequest;
+import com.paybridge.api.ApiDtos.RefundView;
 import com.paybridge.api.ApiException;
 import com.paybridge.domain.AppRole;
 import com.paybridge.domain.DemoPrincipal;
@@ -236,7 +239,7 @@ class PaymentApplicationServiceTest {
 
     service.refund(INTENT_ID, partial, KEY, operator);
 
-    verify(repository).insertRefund(eq(INTENT_ID), eq(2500L), eq("Customer request"), anyString());
+    verify(repository).insertRefund(INTENT_ID, 2500L, "Customer request", "user-operator-01");
     verify(repository).insertOutboxEvent(INTENT_ID, "PAYMENT_REFUNDED", 2500);
     when(repository.findPayment(INTENT_ID, null))
         .thenReturn(Optional.of(intent(PaymentStatus.PARTIALLY_REFUNDED, SimulationOutcome.APPROVE, 12500, 2500)));
@@ -248,6 +251,10 @@ class PaymentApplicationServiceTest {
         assertThrows(ApiException.class,
             () -> service.refund(
                 INTENT_ID, new RefundRequest(1, "Race recovery"), "refund-key-03", operator)).code());
+    verify(repository, never()).insertRefund(eq(INTENT_ID), eq(1L), anyString(), anyString());
+    verify(repository, never()).insertOutboxEvent(INTENT_ID, "PAYMENT_REFUNDED", 1);
+    verify(repository, never()).insertActionIdempotency(
+        anyString(), eq("REFUND"), eq("refund-key-03"), anyString(), anyString());
     assertEquals("REFUND_EXCEEDS_CAPTURE",
         assertThrows(ApiException.class,
             () -> service.refund(
@@ -335,6 +342,46 @@ class PaymentApplicationServiceTest {
     assertEquals("RECONCILIATION_UNAVAILABLE",
         assertThrows(ApiException.class,
             () -> service.reconcile(INTENT_ID, "reconcile-key-06", operator)).code());
+  }
+
+  @Test
+  void refundHistoryResolvesKnownActorsAndLeavesUnknownOrLegacyActorsUnnamed() {
+    when(repository.findPayment(INTENT_ID, null))
+        .thenReturn(Optional.of(intent(PaymentStatus.PARTIALLY_REFUNDED, SimulationOutcome.APPROVE, 12500, 4000)));
+    when(repository.findRefunds(INTENT_ID)).thenReturn(java.util.List.of(
+        refund("refund-3", "user-operator-01", 1500L, 8500L),
+        refund("refund-2", "user-unknown-99", 1000L, 10000L),
+        refund("refund-1", null, 1500L, null)));
+
+    RefundHistoryView history = service.refundHistory(INTENT_ID, operator);
+
+    assertEquals(INTENT_ID, history.paymentIntentId());
+    assertEquals("USD", history.currency());
+    assertEquals(12500, history.capturedAmountMinor());
+    assertEquals(4000, history.refundedAmountMinor());
+    assertEquals(8500, history.remainingRefundableMinor());
+    assertEquals("Morgan Patel", history.refunds().get(0).actorName());
+    assertEquals("user-operator-01", history.refunds().get(0).actorId());
+    assertNull(history.refunds().get(1).actorName());
+    assertEquals("user-unknown-99", history.refunds().get(1).actorId());
+    assertNull(history.refunds().get(2).actorId());
+    assertNull(history.refunds().get(2).remainingAfterMinor());
+  }
+
+  @Test
+  void refundHistoryIsScopedToTheCallersMerchant() {
+    DemoPrincipal otherMerchant =
+        new DemoPrincipal("user-merchant-02", "Casey Rivera", AppRole.MERCHANT, "merchant-demo-02");
+    when(repository.findPayment(INTENT_ID, "merchant-demo-02")).thenReturn(Optional.empty());
+
+    assertEquals("PAYMENT_NOT_FOUND",
+        assertThrows(ApiException.class, () -> service.refundHistory(INTENT_ID, otherMerchant)).code());
+    verify(repository, never()).findRefunds(INTENT_ID);
+  }
+
+  private RefundView refund(String id, String actorId, long amountMinor, Long remainingAfterMinor) {
+    return new RefundView(id, INTENT_ID, actorId, null, "Synthetic reason", "USD", amountMinor,
+        remainingAfterMinor, "2026-10-30T12:00:00Z");
   }
 
   private PaymentIntentView intent(

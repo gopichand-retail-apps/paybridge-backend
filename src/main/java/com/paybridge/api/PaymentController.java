@@ -4,9 +4,11 @@ import com.paybridge.api.ApiDtos.CreateIntentRequest;
 import com.paybridge.api.ApiDtos.PaymentIntentResponse;
 import com.paybridge.api.ApiDtos.PaymentIntentsResponse;
 import com.paybridge.api.ApiDtos.ReconciliationResponse;
+import com.paybridge.api.ApiDtos.RefundHistoryView;
 import com.paybridge.api.ApiDtos.RefundRequest;
 import com.paybridge.api.ApiDtos.WebhookDeliveryResponse;
 import com.paybridge.domain.DemoPrincipal;
+import com.paybridge.service.IdempotencyRaceRetry;
 import com.paybridge.service.PaymentApplicationService;
 import jakarta.validation.Valid;
 import java.util.Map;
@@ -26,9 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/payment-intents")
 public class PaymentController {
   private final PaymentApplicationService paymentService;
+  private final IdempotencyRaceRetry raceRetry;
 
-  public PaymentController(PaymentApplicationService paymentService) {
+  public PaymentController(PaymentApplicationService paymentService, IdempotencyRaceRetry raceRetry) {
     this.paymentService = paymentService;
+    this.raceRetry = raceRetry;
   }
 
   @GetMapping
@@ -45,7 +49,8 @@ public class PaymentController {
       @AuthenticationPrincipal DemoPrincipal principal,
       @Valid @RequestBody CreateIntentRequest request,
       @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
-    PaymentApplicationService.CreateOutcome result = paymentService.createIntent(principal, request, idempotencyKey);
+    PaymentApplicationService.CreateOutcome result =
+        raceRetry.run(() -> paymentService.createIntent(principal, request, idempotencyKey));
     HttpStatus status = result.duplicate() ? HttpStatus.OK : HttpStatus.CREATED;
     return ResponseEntity.status(status).body(new PaymentIntentResponse(result.paymentIntent(), result.duplicate()));
   }
@@ -62,7 +67,7 @@ public class PaymentController {
       @PathVariable String intentId,
       @AuthenticationPrincipal DemoPrincipal principal,
       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-    return new PaymentIntentResponse(paymentService.authorize(intentId, key, principal), false);
+    return new PaymentIntentResponse(raceRetry.run(() -> paymentService.authorize(intentId, key, principal)), false);
   }
 
   @PostMapping("/{intentId}/capture")
@@ -70,7 +75,7 @@ public class PaymentController {
       @PathVariable String intentId,
       @AuthenticationPrincipal DemoPrincipal principal,
       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-    return new PaymentIntentResponse(paymentService.capture(intentId, key, principal), false);
+    return new PaymentIntentResponse(raceRetry.run(() -> paymentService.capture(intentId, key, principal)), false);
   }
 
   @PostMapping("/{intentId}/void")
@@ -78,7 +83,7 @@ public class PaymentController {
       @PathVariable String intentId,
       @AuthenticationPrincipal DemoPrincipal principal,
       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-    return new PaymentIntentResponse(paymentService.voidIntent(intentId, key, principal), false);
+    return new PaymentIntentResponse(raceRetry.run(() -> paymentService.voidIntent(intentId, key, principal)), false);
   }
 
   @PostMapping("/{intentId}/refunds")
@@ -87,7 +92,15 @@ public class PaymentController {
       @AuthenticationPrincipal DemoPrincipal principal,
       @Valid @RequestBody RefundRequest request,
       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-    return new PaymentIntentResponse(paymentService.refund(intentId, request, key, principal), false);
+    return new PaymentIntentResponse(
+        raceRetry.run(() -> paymentService.refund(intentId, request, key, principal)), false);
+  }
+
+  @GetMapping("/{intentId}/refunds")
+  public RefundHistoryView refundHistory(
+      @PathVariable String intentId,
+      @AuthenticationPrincipal DemoPrincipal principal) {
+    return paymentService.refundHistory(intentId, principal);
   }
 
   @PostMapping("/{intentId}/reconcile")
@@ -95,7 +108,7 @@ public class PaymentController {
       @PathVariable String intentId,
       @AuthenticationPrincipal DemoPrincipal principal,
       @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-    return new ReconciliationResponse(paymentService.reconcile(intentId, key, principal));
+    return new ReconciliationResponse(raceRetry.run(() -> paymentService.reconcile(intentId, key, principal)));
   }
 
   @PostMapping("/{intentId}/webhook-deliveries")

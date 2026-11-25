@@ -75,7 +75,10 @@ provider. The PostgreSQL profile disables local profile login by default.
 3. An approved intent can be captured. Capture writes a transactional outbox event.
 4. A merchant or operator delivers pending events through the in-process HMAC-signed webhook receiver.
 5. An operator reconciles captured/refunded totals against verified events.
-6. An operator can void an authorized intent or record a bounded simulated refund.
+6. An operator can void an authorized intent or record a bounded simulated refund. Overlapping refunds can never total more than was captured, and a rejected attempt changes nothing.
+7. Anyone who can see the intent can read its refund history (`GET /api/v1/payment-intents/{id}/refunds`): reference, actor, reason, currency, amount and the refundable balance left after each refund. Refunds recorded before migration V4 show no actor or remaining balance.
+
+Repeating a write with the same `Idempotency-Key` and the same request returns the original result, including when two such requests arrive at the same moment. The same key with a different request returns `409 IDEMPOTENCY_CONFLICT`.
 
 No network call to a payment processor occurs and no real funds move. Refunds are records only. The webhook key is generated in memory for the local H2 profile when no secret is configured; configure a stable secret for a persistent environment.
 

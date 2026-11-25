@@ -101,15 +101,22 @@ class PaymentRepositoryIntegrationTest {
     repository.updateAuthorization(intentId, "AUTHORIZED");
     repository.updateCapture(intentId, 5000);
 
-    repository.insertRefund(intentId, 3000, "Partial synthetic refund", UUID.randomUUID().toString());
     assertTrue(repository.updateRefund(intentId, 3000));
+    repository.insertRefund(intentId, 3000, "Partial synthetic refund", "user-operator-01");
     assertEquals("PARTIALLY_REFUNDED", repository.findPayment(intentId, null).orElseThrow().status().name());
     assertEquals(3000, repository.findPayment(intentId, null).orElseThrow().refundedAmountMinor());
 
-    repository.insertRefund(intentId, 2000, "Final synthetic refund", UUID.randomUUID().toString());
     assertTrue(repository.updateRefund(intentId, 2000));
+    repository.insertRefund(intentId, 2000, "Final synthetic refund", "user-operator-01");
     assertEquals("REFUNDED", repository.findPayment(intentId, null).orElseThrow().status().name());
     assertFalse(repository.updateRefund(intentId, 1));
+
+    var refunds = repository.findRefunds(intentId);
+    assertEquals(2, refunds.size());
+    assertEquals(0L, refunds.get(0).remainingAfterMinor());
+    assertEquals(2000L, refunds.get(1).remainingAfterMinor());
+    assertEquals("USD", refunds.get(0).currency());
+    assertEquals("user-operator-01", refunds.get(1).actorId());
   }
 
   @Test

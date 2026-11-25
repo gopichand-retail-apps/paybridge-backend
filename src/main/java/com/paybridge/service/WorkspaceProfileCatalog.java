@@ -7,6 +7,7 @@ import com.paybridge.domain.DemoPrincipal;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -35,6 +36,14 @@ public class WorkspaceProfileCatalog {
         .map(entry -> new WorkspaceProfileView(
             entry.getKey(), entry.getValue().displayName(), entry.getValue().role()))
         .toList();
+  }
+
+  /** Display name of a synthetic workspace profile by user id, or empty when the id is not a known profile. */
+  public static Optional<String> displayNameForActor(String actorId) {
+    return PROFILES.values().stream()
+        .filter(principal -> principal.id().equals(actorId))
+        .map(DemoPrincipal::displayName)
+        .findFirst();
   }
 
   public DemoPrincipal authenticate(String accountId) {

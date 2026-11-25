@@ -4,6 +4,7 @@ import com.paybridge.api.ApiDtos.AuditEventView;
 import com.paybridge.api.ApiDtos.OverviewView;
 import com.paybridge.api.ApiDtos.PaymentIntentView;
 import com.paybridge.api.ApiDtos.ReconciliationView;
+import com.paybridge.api.ApiDtos.RefundView;
 import com.paybridge.api.ApiDtos.WebhookEventView;
 import com.paybridge.api.ApiDtos.ProviderWebhookPayload;
 import com.paybridge.api.ApiException;
@@ -195,11 +196,39 @@ public class PaymentRepository {
     requireSingleUpdate(updated);
   }
 
-  public void insertRefund(String intentId, long amountMinor, String reason, String idempotencyKey) {
+  /**
+   * Records a refund after {@link #updateRefund} succeeded in the same transaction. The remaining balance is read
+   * from the intent row this transaction already holds locked, so it is exact even when refunds overlap.
+   */
+  public void insertRefund(String intentId, long amountMinor, String reason, String actorId) {
     jdbcTemplate.update("""
-        INSERT INTO payment_refunds (id, payment_intent_id, amount_minor, reason, idempotency_key)
-        VALUES (?, ?, ?, ?, ?)
-        """, UUID.randomUUID().toString(), intentId, amountMinor, reason, idempotencyKey);
+        INSERT INTO payment_refunds (
+          id, payment_intent_id, amount_minor, reason, idempotency_key, actor_id, remaining_after_minor
+        )
+        SELECT ?, pi.id, ?, ?, ?, ?, pi.captured_amount_minor - pi.refunded_amount_minor
+        FROM payment_intents pi WHERE pi.id = ?
+        """, UUID.randomUUID().toString(), amountMinor, reason, UUID.randomUUID().toString(), actorId, intentId);
+  }
+
+  /** Newest first. Ties break on the smaller remaining balance, which is always the later refund. */
+  public List<RefundView> findRefunds(String intentId) {
+    return jdbcTemplate.query("""
+        SELECT r.id, r.payment_intent_id, r.actor_id, r.reason, pi.currency, r.amount_minor,
+          r.remaining_after_minor, r.created_at
+        FROM payment_refunds r
+        JOIN payment_intents pi ON pi.id = r.payment_intent_id
+        WHERE r.payment_intent_id = ?
+        ORDER BY r.created_at DESC, r.remaining_after_minor ASC NULLS LAST
+        """, (resultSet, rowNumber) -> new RefundView(
+        resultSet.getString("id"),
+        resultSet.getString("payment_intent_id"),
+        resultSet.getString("actor_id"),
+        null,
+        resultSet.getString("reason"),
+        resultSet.getString("currency"),
+        resultSet.getLong("amount_minor"),
+        resultSet.getObject("remaining_after_minor") == null ? null : resultSet.getLong("remaining_after_minor"),
+        timestamp(resultSet, "created_at")), intentId);
   }
 
   public boolean updateRefund(String intentId, long refundAmountMinor) {
