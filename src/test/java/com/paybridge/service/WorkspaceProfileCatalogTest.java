@@ -3,6 +3,7 @@ package com.paybridge.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.paybridge.api.ApiException;
 import com.paybridge.domain.AppRole;
@@ -30,6 +31,14 @@ class WorkspaceProfileCatalogTest {
     assertEquals("merchant-demo-02", catalog.authenticate("merchant-cedar").merchantId());
     assertEquals(AppRole.OPERATOR, catalog.authenticate("operator").role());
     assertEquals(AppRole.AUDITOR, catalog.authenticate("auditor").role());
+  }
+
+  @Test
+  void resolvesDisplayNamesOnlyForKnownSyntheticActors() {
+    assertEquals("Morgan Patel", WorkspaceProfileCatalog.displayNameForActor("user-operator-01").orElseThrow());
+    assertEquals("Alex Morgan", WorkspaceProfileCatalog.displayNameForActor("user-merchant-01").orElseThrow());
+    assertTrue(WorkspaceProfileCatalog.displayNameForActor("user-unknown-99").isEmpty());
+    assertTrue(WorkspaceProfileCatalog.displayNameForActor(null).isEmpty());
   }
 
   @Test

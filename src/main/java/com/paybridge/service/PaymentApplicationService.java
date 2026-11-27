@@ -5,7 +5,9 @@ import com.paybridge.api.ApiDtos.CreateIntentRequest;
 import com.paybridge.api.ApiDtos.OverviewView;
 import com.paybridge.api.ApiDtos.PaymentIntentView;
 import com.paybridge.api.ApiDtos.ReconciliationView;
+import com.paybridge.api.ApiDtos.RefundHistoryView;
 import com.paybridge.api.ApiDtos.RefundRequest;
+import com.paybridge.api.ApiDtos.RefundView;
 import com.paybridge.api.ApiDtos.WebhookAck;
 import com.paybridge.api.ApiDtos.WebhookEventView;
 import com.paybridge.api.ApiException;
@@ -179,17 +181,30 @@ public class PaymentApplicationService {
       throw new ApiException(
           HttpStatus.CONFLICT, "REFUND_EXCEEDS_CAPTURE", "Refund exceeds the remaining captured amount");
     }
-    paymentRepository.insertRefund(
-        intentId, request.amountMinor(), request.reason().trim(), UUID.randomUUID().toString());
+    // The guarded update runs first: it takes the row lock that makes the balance exact, and a rejected
+    // attempt returns before any refund row, outbox event or idempotency record is written.
     if (!paymentRepository.updateRefund(intentId, request.amountMinor())) {
       throw new ApiException(HttpStatus.CONFLICT, "REFUND_EXCEEDS_CAPTURE",
           "Refund exceeds the remaining captured amount");
     }
+    paymentRepository.insertRefund(intentId, request.amountMinor(), request.reason().trim(), principal.id());
     paymentRepository.insertOutboxEvent(intentId, "PAYMENT_REFUNDED", request.amountMinor());
     rememberAction(principal, "REFUND", key, requestHash, intentId);
     recordAudit(principal, intent, "payment.refund.recorded");
     LOGGER.info("eventName=paybridge.refund.completed outcome=success");
     return requireAccessible(intentId, principal);
+  }
+
+  @Transactional(readOnly = true)
+  public RefundHistoryView refundHistory(String intentId, DemoPrincipal principal) {
+    PaymentIntentView intent = requireAccessible(intentId, principal);
+    List<RefundView> refunds = paymentRepository.findRefunds(intentId).stream()
+        .map(refund -> new RefundView(refund.id(), refund.paymentIntentId(), refund.actorId(),
+            WorkspaceProfileCatalog.displayNameForActor(refund.actorId()).orElse(null), refund.reason(),
+            refund.currency(), refund.amountMinor(), refund.remainingAfterMinor(), refund.createdAt()))
+        .toList();
+    return new RefundHistoryView(intent.id(), intent.currency(), intent.capturedAmountMinor(),
+        intent.refundedAmountMinor(), intent.capturedAmountMinor() - intent.refundedAmountMinor(), refunds);
   }
 
   @Transactional

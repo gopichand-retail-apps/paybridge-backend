@@ -34,6 +34,29 @@ public final class ApiDtos {
       @Positive @Max(100_000_000) long amountMinor,
       @NotBlank @Size(min = 4, max = 160) String reason) {}
 
+  /**
+   * One recorded refund. {@code actorId}, {@code actorName} and {@code remainingAfterMinor}
+   * are null for refunds recorded before actor tracking.
+   */
+  public record RefundView(
+      String id,
+      String paymentIntentId,
+      String actorId,
+      String actorName,
+      String reason,
+      String currency,
+      long amountMinor,
+      Long remainingAfterMinor,
+      String createdAt) {}
+
+  public record RefundHistoryView(
+      String paymentIntentId,
+      String currency,
+      long capturedAmountMinor,
+      long refundedAmountMinor,
+      long remainingRefundableMinor,
+      List<RefundView> refunds) {}
+
   public record PaymentIntentView(
       String id,
       String merchantId,
